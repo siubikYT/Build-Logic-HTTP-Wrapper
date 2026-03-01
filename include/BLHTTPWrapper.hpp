@@ -2,16 +2,16 @@
 #define BLHTTPWRAPPER_HPP
 
 #include "json.hpp"
-
-#include "httpserver.h"
+#include "httplib.h"
 #include <iostream>
-#include <cstring>
 #include <unordered_map>
 #include <bitset>
+#include <functional>
 
 using json = nlohmann::json;
 
 namespace BuildLogicHTTP {
+
   struct ParsedRequest {
     int value = 0;
     bool success = false;
@@ -20,9 +20,11 @@ namespace BuildLogicHTTP {
     std::unordered_map<std::string, std::string> headers;
   };
 
-  int Init(int PORT, void (*handler)(struct http_request_s*));
-  ParsedRequest ParsePost(struct http_request_s* request);
-  void SendResponse(struct http_request_s* request, int value); 
+  using RequestHandler = std::function<void(const ParsedRequest&, std::string& responseBody, std::string& contentType, int& statusCode)>;
+
+  int Init(int PORT, RequestHandler handler);
+  ParsedRequest ParsePost(const httplib::Request& req); 
+  void SendResponse(const ParsedRequest& req, std::string& body, std::string& type, int& statusCode);
 }
 
 #endif

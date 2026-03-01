@@ -1,104 +1,106 @@
-#define HTTPSERVER_IMPL
 #include "BLHTTPWrapper.hpp"
 
-int BuildLogicHTTP::Init(int PORT, void (*handler)(struct http_request_s*)) {
-  struct http_server_s* server = http_server_init(PORT, handler);
-  http_server_listen(server);
-  return 0;
+BuildLogicHTTP::ParsedRequest BuildLogicHTTP::ParsePost(const httplib::Request& req) {
+    ParsedRequest result;
+
+    for (const auto& [key, value] : req.headers) {
+        result.headers[key] = value;
+    }
+
+    std::string contentType = req.get_header_value("Content-Type");
+    if(contentType.empty())
+        contentType = "application/octet-stream";
+
+    result.headers["Content-Type"] = contentType;
+
+    std::string binaryString;
+    try {
+        if(contentType.find("application/json") != std::string::npos){
+            json parsed = json::parse(req.body);
+            if(!parsed.contains("value")){
+                result.error = "Missing value field";
+                result.statusCode = 400;
+                return result;
+            }
+            binaryString = parsed["value"];
+        }
+        else if(contentType.find("application/x-www-form-urlencoded") != std::string::npos){
+            const std::string key = "value=";
+            if(req.body.rfind(key,0)!=0){
+                result.error = "Invalid form format";
+                result.statusCode = 400;
+                return result;
+            }
+            binaryString = req.body.substr(key.length());
+        }
+        else{
+            result.error = "Unsupported Content-Type";
+            result.statusCode = 415;
+            return result;
+        }
+
+        if(binaryString.empty() || binaryString.size()>8){
+            result.error = "Wrong binary length";
+            result.statusCode = 400;
+            return result;
+        }
+
+        for(char c:binaryString){
+            if(c!='0' && c!='1'){
+                result.error = "Invalid binary string";
+                result.statusCode = 400;
+                return result;
+            }
+        }
+
+        result.value = std::stoi(binaryString,nullptr,2);
+        result.success = true;
+        result.statusCode = 200;
+    } catch(...){
+        result.error = "Parsing error";
+        result.statusCode = 400;
+    }
+
+    return result;
 }
 
-ParsedRequest BuildLogicHTTP::ParsePost(struct http_request_s* request) {
-  ParsedRequest result;
+void BuildLogicHTTP::SendResponse(const ParsedRequest& req, std::string& body, std::string& type, int& statusCode) {
+    int value = req.value;
+    if(value < 0 || value > 255)
+        value = 0;
 
-  const char* rawHeader = http_request_header(request, "Content-Type");
-  std::string contentType = rawHeader ? std::string(rawHeader) : "";
-  if (!contentType.empty()) {
-      result.headers["Content-Type"] = contentType;
-  } else {
-      result.headers["Content-Type"] = "application/octet-stream";
-  }
+    std::bitset<8> binary(value);
 
-  if (strcmp(request->method, "POST") != 0) {
-      result.statusCode = 405;
-      result.error = "Only POST allowed";
-      return result;
-  }
+    json response;
+    response["value"] = binary.to_string();
 
-  if (!request->body) {
-      result.statusCode = 400;
-      result.error = "Empty body";
-      return result;
-  }
-
-  std::string body(request->body);
-  std::string binaryString;
-
-  try {
-      if (contentType.find("application/json") != std::string::npos) {
-          json parsed = json::parse(body);
-
-          if (!parsed.contains("value")) {
-              result.error = "Missing value field";
-              return result;
-          }
-
-          binaryString = parsed["value"];
-      }
-      else if (contentType.find("application/x-www-form-urlencoded") != std::string::npos) {
-          const std::string key = "value=";
-
-          if (body.rfind(key, 0) != 0) {
-              result.error = "Invalid form format";
-              return result;
-          }
-
-          binaryString = body.substr(key.length());
-      }
-      else {
-          result.statusCode = 415;
-          result.error = "Unsupported Content-Type";
-          return result;
-      }
-
-      if (binaryString.empty() || binaryString.size() > 8) {
-          result.error = "Wrong binary length";
-          return result;
-      }
-
-      for (char c : binaryString) {
-          if (c != '0' && c != '1') {
-              result.error = "Invalid binary string";
-              return result;
-          }
-      }
-
-      result.value = std::stoi(binaryString, nullptr, 2);
-      result.success = true;
-      result.statusCode = 200;
-  }
-  catch (...) {
-      result.statusCode = 400;
-      result.error = "Parsing error";
-  }
-
-  return result; 
+    body = response.dump();
+    type = "application/json";
+    statusCode = 200;
 }
 
-void BuildLogicHTTP::SendResponse(struct http_request_s* request, int value) {
-  if (value < 0 || value > 255)
-      value = 0;
+int BuildLogicHTTP::Init(int PORT, RequestHandler handler){
+    httplib::Server svr;
 
-  std::bitset<8> binary(value);
+    svr.Post("/", [handler](const httplib::Request& req, httplib::Response& res){
+        auto parsed = ParsePost(req);
 
-  json response;
-  response["value"] = binary.to_string();
+        std::string responseBody;
+        std::string contentType;
+        int statusCode;
 
-  std::string body = response.dump();
+        handler(parsed, responseBody, contentType, statusCode);
 
-  struct http_response_s* res = http_response_init();
-  http_response_status(res, 200);
-  http_response_header(res, "Content-Type", "application/json");
-  http_response_body(res, body.c_str(), body.size());
+        res.status = statusCode;
+        res.set_content(responseBody, contentType);
 
-  http_respond(request, res);
+        if(parsed.success)
+            std::cout<<"Received: "<<parsed.value<<std::endl;
+        else
+            std::cout<<"Error: "<<parsed.error<<std::endl;
+    });
+
+    std::cout<<"Server listening on http://localhost:"<<PORT<<std::endl;
+    svr.listen("0.0.0.0", PORT);
+    return 0;
 }

@@ -1,9 +1,9 @@
 #ifndef BLHTTPWRAPPER_HPP
 #define BLHTTPWRAPPER_HPP
 
-#include "include/json.hpp"
+#include "json.hpp"
 
-#include "include/httpserver.h"
+#include "httpserver.h"
 #include <iostream>
 #include <cstring>
 
